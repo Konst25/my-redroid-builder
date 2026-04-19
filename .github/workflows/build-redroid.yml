@@ -1,0 +1,68 @@
+name: Build Redroid with GApps and ARM Support
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_version:
+        description: 'Android version'
+        required: true
+        default: '12.0.0'
+        type: choice
+        options:
+          - '11.0.0'
+          - '12.0.0'
+          - '13.0.0'
+
+env:
+  ANDROID_VERSION: ${{ github.event.inputs.android_version || '12.0.0' }}
+  IMAGE_NAME: "my-redroid"
+  IMAGE_TAG: "${{ github.event.inputs.android_version || '12.0.0' }}-gapps-mindthegapps-ndk"
+  REGISTRY: "ghcr.io/${{ github.repository_owner }}"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout redroid-script
+        uses: actions/checkout@v4
+        with:
+          repository: ayasa520/redroid-script
+          path: redroid-script
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lzip
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Build custom image
+        working-directory: ./redroid-script
+        run: |
+          python redroid.py \
+            -a ${{ env.ANDROID_VERSION }} \
+            -mtg \
+            -n \
+            -c docker
+
+      - name: Tag image for Registry
+        run: |
+          docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Log in to Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Push to Registry
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest

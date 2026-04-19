@@ -1,0 +1,11 @@
+# Временные файлы Docker
+*.tmp
+*.log
+
+# Файлы IDE
+.vscode/
+.idea/
+
+# Системные файлы
+.DS_Store
+Thumbs.db
