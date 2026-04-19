@@ -17,7 +17,8 @@ env:
   ANDROID_VERSION: ${{ github.event.inputs.android_version || '12.0.0' }}
   IMAGE_NAME: "my-redroid"
   IMAGE_TAG: "${{ github.event.inputs.android_version || '12.0.0' }}-gapps-mindthegapps-ndk"
-  REGISTRY: "ghcr.io/${{ github.repository_owner }}"
+  # ИСПРАВЛЕНО: используем github.repository (уже в нижнем регистре)
+  REGISTRY: "ghcr.io/${{ github.repository }}"
 
 jobs:
   build:
@@ -33,27 +34,15 @@ jobs:
           repository: ayasa520/redroid-script
           path: redroid-script
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y lzip wget git
+          sudo apt-get install -y lzip
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install requests
-          pip install tqdm
-          # Добавьте другие зависимости по мере необходимости
-
-      - name: Verify installation
-        run: |
-          python -c "import requests; print('requests OK')"
-          python -c "import tqdm; print('tqdm OK')"
 
       - name: Build custom image
         working-directory: ./redroid-script
@@ -64,19 +53,28 @@ jobs:
             -n \
             -c docker
 
-      - name: List Docker images
+      - name: List Docker images (debug)
         run: |
-          docker images | grep redroid
+          echo "Available Docker images:"
+          docker images
 
       - name: Tag image for Registry
         run: |
-          docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          # Проверяем существование образа
+          if docker image inspect redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk &> /dev/null; then
+            echo "Image found, tagging..."
+            docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
+              ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          else
+            echo "Error: Image not found!"
+            docker images
+            exit 1
+          fi
 
       - name: Log in to Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push to Registry
         run: |
