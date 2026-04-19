@@ -43,11 +43,14 @@ jobs:
         with:
           python-version: '3.10'
 
-      # НОВЫЙ ШАГ: Установка Python зависимостей
+      # НОВЫЙ ШАГ: Устанавливаем зависимости Python
       - name: Install Python dependencies
         working-directory: ./redroid-script
         run: |
-          pip install requests
+          # Устанавливаем pip если его нет
+          python -m ensurepip --upgrade
+          # Устанавливаем необходимые библиотеки
+          pip install tqdm requests
 
       - name: Build custom image
         working-directory: ./redroid-script
