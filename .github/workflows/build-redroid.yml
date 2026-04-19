@@ -17,6 +17,7 @@ env:
   ANDROID_VERSION: ${{ github.event.inputs.android_version || '12.0.0' }}
   IMAGE_NAME: "my-redroid"
   IMAGE_TAG: "${{ github.event.inputs.android_version || '12.0.0' }}-gapps-mindthegapps-ndk"
+  # ИСПРАВЛЕНО: Приводим имя владельца к нижнему регистру
   REGISTRY: "ghcr.io/${{ github.repository_owner }}"
 
 jobs:
@@ -43,7 +44,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      # НОВЫЙ ШАГ: Устанавливаем Python зависимости
       - name: Install Python dependencies
         working-directory: ./redroid-script
         run: |
@@ -59,17 +59,26 @@ jobs:
             -n \
             -c docker
 
+      - name: Prepare lowercase registry name
+        id: registry
+        run: |
+          # Преобразуем имя владельца в нижний регистр
+          LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "lowercase_owner=${LOWERCASE_OWNER}" >> $GITHUB_OUTPUT
+          echo "full_registry=ghcr.io/${LOWERCASE_OWNER}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+
       - name: Tag image for Registry
         run: |
+          # Используем преобразованное имя в нижнем регистре
           docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
           docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ steps.registry.outputs.full_registry }}:latest
 
       - name: Log in to Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Push to Registry
         run: |
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
+          docker push ${{ steps.registry.outputs.full_registry }}:latest
