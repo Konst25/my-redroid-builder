@@ -17,8 +17,6 @@ env:
   ANDROID_VERSION: ${{ github.event.inputs.android_version || '12.0.0' }}
   IMAGE_NAME: "my-redroid"
   IMAGE_TAG: "${{ github.event.inputs.android_version || '12.0.0' }}-gapps-mindthegapps-ndk"
-  # ИСПРАВЛЕНО: Приводим имя владельца к нижнему регистру
-  REGISTRY: "ghcr.io/${{ github.repository_owner }}"
 
 jobs:
   build:
@@ -59,20 +57,42 @@ jobs:
             -n \
             -c docker
 
+      # НОВЫЙ ШАГ: Проверяем какие образы создались
+      - name: List Docker images
+        run: |
+          echo "=== Список всех Docker образов ==="
+          docker images
+          echo "=== Поиск образа redroid ==="
+          docker images | grep redroid || echo "Образы redroid не найдены"
+
+      # НОВЫЙ ШАГ: Определяем точное имя созданного образа
+      - name: Find created image
+        id: find_image
+        run: |
+          # Ищем образ, который начинается с redroid/redroid и содержит версию Android
+          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
+          
+          if [ -z "$CREATED_IMAGE" ]; then
+            # Если не нашли, пробуем другие варианты
+            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | head -n 1)
+          fi
+          
+          echo "Найден образ: $CREATED_IMAGE"
+          echo "created_image=$CREATED_IMAGE" >> $GITHUB_OUTPUT
+
       - name: Prepare lowercase registry name
         id: registry
         run: |
-          # Преобразуем имя владельца в нижний регистр
           LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "lowercase_owner=${LOWERCASE_OWNER}" >> $GITHUB_OUTPUT
           echo "full_registry=ghcr.io/${LOWERCASE_OWNER}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
 
       - name: Tag image for Registry
         run: |
-          # Используем преобразованное имя в нижнем регистре
-          docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
+          # Используем найденное имя образа
+          docker tag ${{ steps.find_image.outputs.created_image }} \
             ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
-          docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
+          docker tag ${{ steps.find_image.outputs.created_image }} \
             ${{ steps.registry.outputs.full_registry }}:latest
 
       - name: Log in to Registry
