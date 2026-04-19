@@ -17,7 +17,6 @@ env:
   ANDROID_VERSION: ${{ github.event.inputs.android_version || '12.0.0' }}
   IMAGE_NAME: "my-redroid"
   IMAGE_TAG: "${{ github.event.inputs.android_version || '12.0.0' }}-gapps-mindthegapps-ndk"
-  REGISTRY: "ghcr.io/${{ github.repository_owner }}"
 
 jobs:
   build:
@@ -33,7 +32,7 @@ jobs:
           repository: ayasa520/redroid-script
           path: redroid-script
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y lzip
@@ -42,15 +41,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      # НОВЫЙ ШАГ: Устанавливаем зависимости Python
-      - name: Install Python dependencies
-        working-directory: ./redroid-script
-        run: |
-          # Устанавливаем pip если его нет
-          python -m ensurepip --upgrade
-          # Устанавливаем необходимые библиотеки
-          pip install tqdm requests
 
       - name: Build custom image
         working-directory: ./redroid-script
@@ -61,17 +51,29 @@ jobs:
             -n \
             -c docker
 
+      - name: Set lowercase repository owner
+        id: vars
+        run: |
+          echo "owner_lower=${OWNER,,}" >> $GITHUB_OUTPUT
+        env:
+          OWNER: '${{ github.repository_owner }}'
+
       - name: Tag image for Registry
         run: |
+          REGISTRY="ghcr.io/${{ steps.vars.outputs.owner_lower }}"
           docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            $REGISTRY/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           docker tag redroid/redroid:${{ env.ANDROID_VERSION }}-mindthegapps-ndk \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            $REGISTRY/${{ env.IMAGE_NAME }}:latest
+          echo "REGISTRY_PATH=$REGISTRY" >> $GITHUB_ENV
 
       - name: Log in to Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        run: |
+          REGISTRY="ghcr.io/${{ steps.vars.outputs.owner_lower }}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login $REGISTRY -u ${{ github.actor }} --password-stdin
 
       - name: Push to Registry
         run: |
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          REGISTRY="ghcr.io/${{ steps.vars.outputs.owner_lower }}"
+          docker push $REGISTRY/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker push $REGISTRY/${{ env.IMAGE_NAME }}:latest
