@@ -1,4 +1,4 @@
-name: Build Redroid with GApps and ARM Support (Simplified)
+name: Build Redroid with GApps and ARM Support
 
 on:
   workflow_dispatch:
@@ -6,17 +6,18 @@ on:
       android_version:
         description: 'Android version'
         required: true
-        default: '12.0.0'
+        default: '13.0.0'
         type: choice
         options:
           - '11.0.0'
           - '12.0.0'
+          - '12.1.0'
           - '13.0.0'
+          - '14.0.0'
 
 env:
-  ANDROID_VERSION: ${{ github.event.inputs.android_version || '12.0.0' }}
+  ANDROID_VERSION: ${{ github.event.inputs.android_version || '13.0.0' }}
   IMAGE_NAME: "my-redroid"
-  IMAGE_TAG: "${{ github.event.inputs.android_version || '12.0.0' }}-gapps-mindthegapps-ndk-fixed"
 
 jobs:
   build:
@@ -47,55 +48,128 @@ jobs:
         run: |
           pip install tqdm requests
 
+      - name: Determine GApps type based on Android version
+        id: gapps_type
+        run: |
+          ANDROID_VER="${{ env.ANDROID_VERSION }}"
+          
+          case "$ANDROID_VER" in
+            14.0.0)
+              echo "GAPPS_TYPE=lg" >> $GAPPS_ENV
+              echo "GAPPS_FLAG=-lg" >> $GAPPS_ENV
+              echo "Используем LiteGapps для Android 14" >> $GITHUB_STEP_SUMMARY
+              ;;
+            11.0.0)
+              echo "GAPPS_TYPE=g" >> $GAPPS_ENV
+              echo "GAPPS_FLAG=-g" >> $GAPPS_ENV
+              echo "Используем OpenGapps для Android 11" >> $GITHUB_STEP_SUMMARY
+              ;;
+            *)
+              echo "GAPPS_TYPE=mtg" >> $GAPPS_ENV
+              echo "GAPPS_FLAG=-mtg" >> $GAPPS_ENV
+              echo "Используем MindTheGapps для Android $ANDROID_VER" >> $GITHUB_STEP_SUMMARY
+              ;;
+          esac
+        env:
+          GAPPS_ENV: $GITHUB_ENV
+
+      - name: Set image tag
+        id: tag
+        run: |
+          case "${{ env.GAPPS_TYPE }}" in
+            lg)
+              GAPPS_SUFFIX="litegapps"
+              ;;
+            g)
+              GAPPS_SUFFIX="opengapps"
+              ;;
+            *)
+              GAPPS_SUFFIX="mindthegapps"
+              ;;
+          esac
+          echo "IMAGE_TAG=${{ env.ANDROID_VERSION }}-${GAPPS_SUFFIX}-ndk-fixed" >> $GITHUB_ENV
+
       - name: Build custom image
         working-directory: ./redroid-script
         run: |
+          echo "Сборка Android ${{ env.ANDROID_VERSION }} с флагом ${{ env.GAPPS_FLAG }}"
           python redroid.py \
             -a ${{ env.ANDROID_VERSION }} \
-            -mtg \
+            ${{ env.GAPPS_FLAG }} \
             -n \
             -c docker
 
-      - name: Find and fix image
+      - name: Find created image
+        id: find_image
         run: |
-          # Находим созданный образ
-          ORIGINAL_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
-          echo "Original image: $ORIGINAL_IMAGE"
+          # Ищем созданный образ
+          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
           
-          # Создаем Dockerfile для исправления
-          cat > Dockerfile << 'EOF'
-          FROM $ORIGINAL_IMAGE
-          USER root
+          if [ -z "$CREATED_IMAGE" ]; then
+            # Пробуем другие варианты
+            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "${{ env.ANDROID_VERSION }}" | head -n 1)
+          fi
+          
+          if [ -z "$CREATED_IMAGE" ]; then
+            echo "❌ Образ не найден!"
+            docker images
+            exit 1
+          fi
+          
+          echo "✅ Найден образ: $CREATED_IMAGE"
+          echo "created_image=$CREATED_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Fix ANGLE libraries
+        run: |
+          echo "🔧 Исправление ANGLE библиотек..."
+          
+          # Создаем временный контейнер
+          CONTAINER_ID=$(docker create ${{ steps.find_image.outputs.created_image }})
+          docker start $CONTAINER_ID
           
           # Удаляем ANGLE библиотеки
-          RUN rm -f /system/lib64/libGLESv2_angle.so \
-              /system/lib/libGLESv2_angle.so \
-              /system/lib64/egl/libGLESv2_angle.so \
-              /system/lib/egl/libGLESv2_angle.so \
-              /system/lib64/libEGL_angle.so \
-              /system/lib/libEGL_angle.so 2>/dev/null || true
+          docker exec --user root $CONTAINER_ID sh -c "
+            mount -o remount,rw /system 2>/dev/null || true
+            
+            # Удаляем все ANGLE библиотеки
+            find /system -name '*angle*.so' -type f -delete 2>/dev/null || true
+            
+            # Создаем символические ссылки на эмуляцию
+            if [ -f /system/lib64/libGLESv2_emulation.so ]; then
+              ln -sf /system/lib64/libGLESv2_emulation.so /system/lib64/libGLESv2_angle.so
+            fi
+            
+            if [ -f /system/lib/libGLESv2_emulation.so ]; then
+              ln -sf /system/lib/libGLESv2_emulation.so /system/lib/libGLESv2_angle.so
+            fi
+            
+            # Для Android 14 могут быть дополнительные пути
+            if [ -f /system/lib64/libGLESv2_emulation.so ]; then
+              ln -sf /system/lib64/libGLESv2_emulation.so /system/lib64/libGLESv2_angle.so
+            fi
+          "
           
-          # Создаем символические ссылки на эмуляцию
-          RUN if [ -f /system/lib64/libGLESv2_emulation.so ]; then \
-                ln -sf /system/lib64/libGLESv2_emulation.so /system/lib64/libGLESv2_angle.so; \
-              fi && \
-              if [ -f /system/lib/libGLESv2_emulation.so ]; then \
-                ln -sf /system/lib/libGLESv2_emulation.so /system/lib/libGLESv2_angle.so; \
-              fi
+          docker stop $CONTAINER_ID
           
-          # Устанавливаем переменные окружения
+          # Сохраняем исправленный образ
+          docker commit $CONTAINER_ID fixed-image:temp
+          docker rm $CONTAINER_ID
+          
+          echo "✅ Исправление завершено"
+
+      - name: Create final image
+        run: |
+          cat > Dockerfile.final << 'EOF'
+          FROM fixed-image:temp
+          
           ENV ANDROID_EMU_GLES_LIB=libGLESv2_emulation.so
           ENV ANGLE_DISABLE=1
           ENV LIBGL_ALWAYS_SOFTWARE=1
-          
-          USER system
           EOF
           
-          # Собираем исправленный образ
-          docker build -t fixed-image:latest .
+          docker build -f Dockerfile.final -t ${{ steps.find_image.outputs.created_image }}-fixed .
           
-          # Сохраняем для следующих шагов
-          echo "fixed_image=fixed-image:latest" >> $GITHUB_ENV
+          echo "✅ Финальный образ создан"
 
       - name: Prepare registry
         id: registry
@@ -105,8 +179,19 @@ jobs:
 
       - name: Tag and push
         run: |
-          docker tag fixed-image:latest ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
-          docker tag fixed-image:latest ${{ steps.registry.outputs.full_registry }}:latest
+          docker tag ${{ steps.find_image.outputs.created_image }}-fixed \
+            ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
+          docker tag ${{ steps.find_image.outputs.created_image }}-fixed \
+            ${{ steps.registry.outputs.full_registry }}:latest
+          
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          
           docker push ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
           docker push ${{ steps.registry.outputs.full_registry }}:latest
+          
+          echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}"
+
+      - name: Cleanup
+        run: |
+          docker rmi fixed-image:temp 2>/dev/null || true
+          docker system prune -f
