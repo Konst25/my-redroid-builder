@@ -27,30 +27,53 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Build image
+      - name: Build base image
         working-directory: ./redroid-script
         run: |
           pip install tqdm requests
           python redroid.py -a 12.0.0 -mtg -n -c docker
 
-      - name: Fix native bridge
+      - name: Create fixed Dockerfile
         run: |
-          IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*12.0.0" | head -n 1)
-          CONTAINER=$(docker create $IMAGE)
-          docker start $CONTAINER
+          # Находим созданный образ
+          BASE_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*12.0.0" | head -n 1)
+          echo "Base image: $BASE_IMAGE"
+          echo "BASE_IMAGE=$BASE_IMAGE" >> $GITHUB_ENV
           
-          # Создаем символические ссылки
-          docker exec --user 0 $CONTAINER sh -c "
-            mount -o remount,rw /system
-            ln -sf /system/lib64/libndk_translation.so /system/lib64/libnb.so
-            ln -sf /system/lib/libndk_translation.so /system/lib/libnb.so
-            mount -o remount,ro /system
-          "
+          # Создаем Dockerfile для фикса
+          cat > Dockerfile.fix << 'EOF'
+          FROM $BASE_IMAGE
           
-          docker commit $CONTAINER ghcr.io/${{ github.repository_owner }}/my-redroid:12.0.0-fixed
-          docker stop $CONTAINER
+          USER root
+          
+          # Создаем символические ссылки для native bridge
+          RUN ln -sf /system/lib64/libndk_translation.so /system/lib64/libnb.so && \
+              ln -sf /system/lib/libndk_translation.so /system/lib/libnb.so
+          
+          # Отключаем SetupWizard
+          RUN echo 'ro.setupwizard.mode=DISABLED' >> /system/build.prop && \
+              echo 'ro.setupwizard.enable_bypass=1' >> /system/build.prop
+          
+          USER system
+          EOF
+
+      - name: Build fixed image
+        run: |
+          docker build -f Dockerfile.fix -t fixed-image:latest .
+          
+          # Тегируем для registry
+          LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "TAGGED_IMAGE=ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed" >> $GITHUB_ENV
+          
+          docker tag fixed-image:latest ${{ env.TAGGED_IMAGE }}
 
       - name: Push to registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker push ghcr.io/${{ github.repository_owner }}/my-redroid:12.0.0-fixed
+          docker push ${{ env.TAGGED_IMAGE }}
+          
+          echo "✅ Образ опубликован: ${{ env.TAGGED_IMAGE }}"
+
+      - name: Cleanup
+        run: |
+          docker system prune -f
