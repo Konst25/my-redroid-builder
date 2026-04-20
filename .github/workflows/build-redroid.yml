@@ -33,7 +33,7 @@ jobs:
           repository: ayasa520/redroid-script
           path: redroid-script
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y lzip
@@ -46,6 +46,7 @@ jobs:
       - name: Install Python dependencies
         working-directory: ./redroid-script
         run: |
+          python -m pip install --upgrade pip
           pip install tqdm requests
 
       - name: Determine GApps type based on Android version
@@ -55,39 +56,24 @@ jobs:
           
           case "$ANDROID_VER" in
             14.0.0)
-              echo "GAPPS_TYPE=lg" >> $GAPPS_ENV
-              echo "GAPPS_FLAG=-lg" >> $GAPPS_ENV
-              echo "Используем LiteGapps для Android 14" >> $GITHUB_STEP_SUMMARY
+              echo "GAPPS_FLAG=-lg"
+              echo "GAPPS_NAME=litegapps"
+              echo "Используем LiteGapps для Android 14"
               ;;
             11.0.0)
-              echo "GAPPS_TYPE=g" >> $GAPPS_ENV
-              echo "GAPPS_FLAG=-g" >> $GAPPS_ENV
-              echo "Используем OpenGapps для Android 11" >> $GITHUB_STEP_SUMMARY
+              echo "GAPPS_FLAG=-g"
+              echo "GAPPS_NAME=opengapps"
+              echo "Используем OpenGapps для Android 11"
               ;;
             *)
-              echo "GAPPS_TYPE=mtg" >> $GAPPS_ENV
-              echo "GAPPS_FLAG=-mtg" >> $GAPPS_ENV
-              echo "Используем MindTheGapps для Android $ANDROID_VER" >> $GITHUB_STEP_SUMMARY
+              echo "GAPPS_FLAG=-mtg"
+              echo "GAPPS_NAME=mindthegapps"
+              echo "Используем MindTheGapps для Android $ANDROID_VER"
               ;;
           esac
-        env:
-          GAPPS_ENV: $GITHUB_ENV
-
-      - name: Set image tag
-        id: tag
-        run: |
-          case "${{ env.GAPPS_TYPE }}" in
-            lg)
-              GAPPS_SUFFIX="litegapps"
-              ;;
-            g)
-              GAPPS_SUFFIX="opengapps"
-              ;;
-            *)
-              GAPPS_SUFFIX="mindthegapps"
-              ;;
-          esac
-          echo "IMAGE_TAG=${{ env.ANDROID_VERSION }}-${GAPPS_SUFFIX}-ndk-fixed" >> $GITHUB_ENV
+          
+          echo "GAPPS_FLAG=${{ env.GAPPS_FLAG }}" >> $GITHUB_ENV
+          echo "GAPPS_NAME=${{ env.GAPPS_NAME }}" >> $GITHUB_ENV
 
       - name: Build custom image
         working-directory: ./redroid-script
@@ -99,6 +85,13 @@ jobs:
             -n \
             -c docker
 
+      - name: List Docker images
+        run: |
+          echo "=== Список всех Docker образов ==="
+          docker images
+          echo "=== Поиск образа redroid ==="
+          docker images | grep redroid || echo "Образы redroid не найдены"
+
       - name: Find created image
         id: find_image
         run: |
@@ -106,7 +99,7 @@ jobs:
           CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
           
           if [ -z "$CREATED_IMAGE" ]; then
-            # Пробуем другие варианты
+            # Пробуем другие варианты тегов
             CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "${{ env.ANDROID_VERSION }}" | head -n 1)
           fi
           
@@ -119,77 +112,95 @@ jobs:
           echo "✅ Найден образ: $CREATED_IMAGE"
           echo "created_image=$CREATED_IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Fix ANGLE libraries
+      - name: Fix ANGLE libraries using Dockerfile
         run: |
-          echo "🔧 Исправление ANGLE библиотек..."
+          echo "🔧 Исправление ANGLE библиотек через Dockerfile..."
           
-          # Создаем временный контейнер
-          CONTAINER_ID=$(docker create ${{ steps.find_image.outputs.created_image }})
-          docker start $CONTAINER_ID
+          # Создаем Dockerfile для исправления
+          cat > Dockerfile.fix << 'EOF'
+          FROM ${{ steps.find_image.outputs.created_image }}
+          
+          # Переключаемся на root (UID 0)
+          USER 0
           
           # Удаляем ANGLE библиотеки
-          docker exec --user root $CONTAINER_ID sh -c "
-            mount -o remount,rw /system 2>/dev/null || true
-            
-            # Удаляем все ANGLE библиотеки
-            find /system -name '*angle*.so' -type f -delete 2>/dev/null || true
-            
-            # Создаем символические ссылки на эмуляцию
-            if [ -f /system/lib64/libGLESv2_emulation.so ]; then
-              ln -sf /system/lib64/libGLESv2_emulation.so /system/lib64/libGLESv2_angle.so
-            fi
-            
-            if [ -f /system/lib/libGLESv2_emulation.so ]; then
-              ln -sf /system/lib/libGLESv2_emulation.so /system/lib/libGLESv2_angle.so
-            fi
-            
-            # Для Android 14 могут быть дополнительные пути
-            if [ -f /system/lib64/libGLESv2_emulation.so ]; then
-              ln -sf /system/lib64/libGLESv2_emulation.so /system/lib64/libGLESv2_angle.so
-            fi
-          "
+          RUN rm -f /system/lib64/libGLESv2_angle.so \
+              /system/lib/libGLESv2_angle.so \
+              /system/lib64/egl/libGLESv2_angle.so \
+              /system/lib/egl/libGLESv2_angle.so \
+              /system/lib64/libEGL_angle.so \
+              /system/lib/libEGL_angle.so \
+              /system/lib64/libGLESv1_CM_angle.so \
+              /system/lib/libGLESv1_CM_angle.so \
+              /system/lib64/egl/libEGL_angle.so \
+              /system/lib/egl/libEGL_angle.so 2>/dev/null || true
           
-          docker stop $CONTAINER_ID
+          # Создаем символические ссылки на эмуляцию
+          RUN if [ -f /system/lib64/libGLESv2_emulation.so ]; then \
+                ln -sf /system/lib64/libGLESv2_emulation.so /system/lib64/libGLESv2_angle.so && \
+                echo "Ссылка создана для /system/lib64/libGLESv2_angle.so"; \
+              fi && \
+              if [ -f /system/lib/libGLESv2_emulation.so ]; then \
+                ln -sf /system/lib/libGLESv2_emulation.so /system/lib/libGLESv2_angle.so && \
+                echo "Ссылка создана для /system/lib/libGLESv2_angle.so"; \
+              fi && \
+              if [ -f /system/lib64/egl/libGLESv2_emulation.so ]; then \
+                ln -sf /system/lib64/egl/libGLESv2_emulation.so /system/lib64/egl/libGLESv2_angle.so; \
+              fi && \
+              if [ -f /system/lib/egl/libGLESv2_emulation.so ]; then \
+                ln -sf /system/lib/egl/libGLESv2_emulation.so /system/lib/egl/libGLESv2_angle.so; \
+              fi
           
-          # Сохраняем исправленный образ
-          docker commit $CONTAINER_ID fixed-image:temp
-          docker rm $CONTAINER_ID
-          
-          echo "✅ Исправление завершено"
-
-      - name: Create final image
-        run: |
-          cat > Dockerfile.final << 'EOF'
-          FROM fixed-image:temp
-          
+          # Устанавливаем переменные окружения
           ENV ANDROID_EMU_GLES_LIB=libGLESv2_emulation.so
           ENV ANGLE_DISABLE=1
           ENV LIBGL_ALWAYS_SOFTWARE=1
+          
+          # Возвращаемся к пользователю system
+          USER system
           EOF
           
-          docker build -f Dockerfile.final -t ${{ steps.find_image.outputs.created_image }}-fixed .
+          # Собираем исправленный образ
+          docker build -f Dockerfile.fix -t fixed-image:temp .
           
-          echo "✅ Финальный образ создан"
+          echo "✅ Исправление завершено"
+
+      - name: Verify ANGLE removal
+        run: |
+          echo "=== Проверка удаления ANGLE библиотек ==="
+          docker run --rm fixed-image:temp sh -c "ls -la /system/lib64/libGLESv2_angle.so 2>/dev/null || echo 'ANGLE не найден - OK'"
+          docker run --rm fixed-image:temp sh -c "ls -la /system/lib/libGLESv2_angle.so 2>/dev/null || echo 'ANGLE не найден - OK'"
 
       - name: Prepare registry
         id: registry
         run: |
           LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           echo "full_registry=ghcr.io/${LOWERCASE_OWNER}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
+          echo "lowercase_owner=${LOWERCASE_OWNER}" >> $GITHUB_OUTPUT
 
-      - name: Tag and push
+      - name: Set image tag
+        id: tag
         run: |
-          docker tag ${{ steps.find_image.outputs.created_image }}-fixed \
-            ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
-          docker tag ${{ steps.find_image.outputs.created_image }}-fixed \
+          IMAGE_TAG="${{ env.ANDROID_VERSION }}-${{ env.GAPPS_NAME }}-ndk-fixed"
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "Тег образа: ${IMAGE_TAG}"
+
+      - name: Tag image for Registry
+        run: |
+          docker tag fixed-image:temp \
+            ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
+          docker tag fixed-image:temp \
             ${{ steps.registry.outputs.full_registry }}:latest
-          
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          
-          docker push ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}
+
+      - name: Log in to Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Push to Registry
+        run: |
+          docker push ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
           docker push ${{ steps.registry.outputs.full_registry }}:latest
           
-          echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ env.IMAGE_TAG }}"
+          echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}"
 
       - name: Cleanup
         run: |
