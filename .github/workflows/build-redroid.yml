@@ -1,8 +1,8 @@
-name: Build Redroid Android 11 with OpenGapps and ARM Support
+name: Build Redroid 11 with Houdini and GApps
 
 on:
   workflow_dispatch:
-    description: 'Сборка Redroid Android 11.0.0 с OpenGapps и ARM поддержкой'
+    description: 'Сборка Redroid Android 11.0.0 с GApps и Houdini (ARM-трансляция)'
 
 env:
   ANDROID_VERSION: "11.0.0"
@@ -38,15 +38,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install tqdm requests
 
-      - name: Build Android 11 image with OpenGapps and NDK
+      - name: Build Android 11 with OpenGapps and Houdini
         working-directory: ./redroid-script
         run: |
-          echo "🔨 Сборка Android ${{ env.ANDROID_VERSION }} с OpenGapps и NDK трансляцией..."
-          echo "Эта версия наиболее стабильна для ARM игр"
+          echo "🔨 Сборка Android 11.0.0 с OpenGapps и Houdini ARM-трансляцией"
+          echo "⚠️  ВНИМАНИЕ: Согласно документации, Houdini может не работать на Redroid"
           python redroid.py \
-            -a ${{ env.ANDROID_VERSION }} \
+            -a 11.0.0 \
             -g \
-            -n \
+            -i \
             -c docker
 
       - name: List Docker images
@@ -59,10 +59,10 @@ jobs:
       - name: Find created image
         id: find_image
         run: |
-          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
+          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*11.0.0" | head -n 1)
           
           if [ -z "$CREATED_IMAGE" ]; then
-            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "${{ env.ANDROID_VERSION }}" | head -n 1)
+            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "11.0.0" | head -n 1)
           fi
           
           if [ -z "$CREATED_IMAGE" ]; then
@@ -74,11 +74,11 @@ jobs:
           echo "✅ Найден образ: $CREATED_IMAGE"
           echo "created_image=$CREATED_IMAGE" >> $GITHUB_OUTPUT
 
-      - name: Verify ARM libraries
+      - name: Verify Houdini installation
         run: |
-          echo "=== Проверка установки NDK библиотек ==="
-          docker run --rm ${{ steps.find_image.outputs.created_image }} sh -c "ls -la /system/lib64/libndk_translation.so 2>/dev/null && echo '✅ NDK найден' || echo '❌ NDK не найден'"
-          docker run --rm ${{ steps.find_image.outputs.created_image }} sh -c "ls -la /system/lib/libndk_translation.so 2>/dev/null && echo '✅ NDK (32-bit) найден' || echo '❌ NDK (32-bit) не найден'"
+          echo "=== Проверка установки Houdini ==="
+          docker run --rm ${{ steps.find_image.outputs.created_image }} sh -c "ls -la /system/lib64/libhoudini.so 2>/dev/null && echo '✅ Houdini найден' || echo '❌ Houdini не найден'"
+          docker run --rm ${{ steps.find_image.outputs.created_image }} sh -c "ls -la /system/lib/libhoudini.so 2>/dev/null && echo '✅ Houdini (32-bit) найден' || echo '❌ Houdini (32-bit) не найден'"
 
       - name: Prepare registry
         id: registry
@@ -89,7 +89,7 @@ jobs:
       - name: Set image tag
         id: tag
         run: |
-          TAG="${{ env.ANDROID_VERSION }}-opengapps-ndk"
+          TAG="11.0.0-opengapps-houdini"
           echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Тег образа: ${TAG}"
 
@@ -98,7 +98,7 @@ jobs:
           docker tag ${{ steps.find_image.outputs.created_image }} \
             ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
           docker tag ${{ steps.find_image.outputs.created_image }} \
-            ${{ steps.registry.outputs.full_registry }}:11.0.0
+            ${{ steps.registry.outputs.full_registry }}:11.0.0-houdini
 
       - name: Log in to Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -106,7 +106,7 @@ jobs:
       - name: Push to Registry
         run: |
           docker push ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
-          docker push ${{ steps.registry.outputs.full_registry }}:11.0.0
+          docker push ${{ steps.registry.outputs.full_registry }}:11.0.0-houdini
           
           echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}"
 
