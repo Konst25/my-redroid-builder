@@ -1,11 +1,11 @@
-name: Build Redroid 11 with Houdini and GApps
+name: Build Redroid Android 12 with Houdini and GApps
 
 on:
   workflow_dispatch:
-    description: 'Сборка Redroid Android 11.0.0 с GApps и Houdini (ARM-трансляция)'
+    description: 'Сборка Redroid Android 12.0.0 с GApps и Houdini (ARM-трансляция)'
 
 env:
-  ANDROID_VERSION: "11.0.0"
+  ANDROID_VERSION: "12.0.0"
   IMAGE_NAME: "my-redroid"
 
 jobs:
@@ -38,14 +38,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install tqdm requests
 
-      - name: Build Android 11 with OpenGapps and Houdini
+      - name: Build Android 12 with MindTheGapps and Houdini
         working-directory: ./redroid-script
         run: |
-          echo "🔨 Сборка Android 11.0.0 с OpenGapps и Houdini ARM-трансляцией"
+          echo "🔨 Сборка Android 12.0.0 с MindTheGapps и Houdini ARM-трансляцией"
           echo "⚠️  ВНИМАНИЕ: Согласно документации, Houdini может не работать на Redroid"
           python redroid.py \
-            -a 11.0.0 \
-            -g \
+            -a 12.0.0 \
+            -mtg \
             -i \
             -c docker
 
@@ -59,10 +59,10 @@ jobs:
       - name: Find created image
         id: find_image
         run: |
-          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*11.0.0" | head -n 1)
+          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*12.0.0" | head -n 1)
           
           if [ -z "$CREATED_IMAGE" ]; then
-            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "11.0.0" | head -n 1)
+            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "12.0.0" | head -n 1)
           fi
           
           if [ -z "$CREATED_IMAGE" ]; then
@@ -89,7 +89,7 @@ jobs:
       - name: Set image tag
         id: tag
         run: |
-          TAG="11.0.0-opengapps-houdini"
+          TAG="12.0.0-mindthegapps-houdini"
           echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Тег образа: ${TAG}"
 
@@ -98,7 +98,7 @@ jobs:
           docker tag ${{ steps.find_image.outputs.created_image }} \
             ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
           docker tag ${{ steps.find_image.outputs.created_image }} \
-            ${{ steps.registry.outputs.full_registry }}:11.0.0-houdini
+            ${{ steps.registry.outputs.full_registry }}:12.0.0-houdini
 
       - name: Log in to Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -106,7 +106,7 @@ jobs:
       - name: Push to Registry
         run: |
           docker push ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
-          docker push ${{ steps.registry.outputs.full_registry }}:11.0.0-houdini
+          docker push ${{ steps.registry.outputs.full_registry }}:12.0.0-houdini
           
           echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}"
 
