@@ -33,16 +33,17 @@ jobs:
           pip install tqdm requests
           python redroid.py -a 12.0.0 -mtg -n -c docker
 
+      - name: Get base image name
+        id: base_image
+        run: |
+          BASE_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*12.0.0" | head -n 1)
+          echo "base_image=${BASE_IMAGE}" >> $GITHUB_OUTPUT
+          echo "Base image: ${BASE_IMAGE}"
+
       - name: Create fixed Dockerfile
         run: |
-          # Находим созданный образ
-          BASE_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*12.0.0" | head -n 1)
-          echo "Base image: $BASE_IMAGE"
-          echo "BASE_IMAGE=$BASE_IMAGE" >> $GITHUB_ENV
-          
-          # Создаем Dockerfile для фикса
-          cat > Dockerfile.fix << 'EOF'
-          FROM $BASE_IMAGE
+          cat > Dockerfile.fix << EOF
+          FROM ${{ steps.base_image.outputs.base_image }}
           
           USER root
           
@@ -63,16 +64,15 @@ jobs:
           
           # Тегируем для registry
           LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "TAGGED_IMAGE=ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed" >> $GITHUB_ENV
-          
-          docker tag fixed-image:latest ${{ env.TAGGED_IMAGE }}
+          docker tag fixed-image:latest ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed
+          echo "IMAGE_NAME=ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed" >> $GITHUB_ENV
 
       - name: Push to registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker push ${{ env.TAGGED_IMAGE }}
+          docker push ${{ env.IMAGE_NAME }}
           
-          echo "✅ Образ опубликован: ${{ env.TAGGED_IMAGE }}"
+          echo "✅ Образ опубликован: ${{ env.IMAGE_NAME }}"
 
       - name: Cleanup
         run: |
