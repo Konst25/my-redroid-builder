@@ -1,4 +1,4 @@
-name: Build Fixed Redroid 12
+name: Build Fixed Redroid 12 (Alternative)
 
 on:
   workflow_dispatch:
@@ -40,31 +40,23 @@ jobs:
           echo "base_image=${BASE_IMAGE}" >> $GITHUB_OUTPUT
           echo "Base image: ${BASE_IMAGE}"
 
-      - name: Create fixed Dockerfile
+      - name: Create fixed image with docker commit
         run: |
-          cat > Dockerfile.fix << EOF
-          FROM ${{ steps.base_image.outputs.base_image }}
+          # Создаем временный контейнер
+          CONTAINER_ID=$(docker create ${{ steps.base_image.outputs.base_image }})
           
-          USER root
+          # Копируем build.prop, модифицируем и копируем обратно
+          docker cp $CONTAINER_ID:/system/build.prop build.prop
+          echo "ro.setupwizard.mode=DISABLED" >> build.prop
+          echo "ro.setupwizard.enable_bypass=1" >> build.prop
+          docker cp build.prop $CONTAINER_ID:/system/build.prop
           
-          # Создаем символические ссылки для native bridge
-          RUN ln -sf /system/lib64/libndk_translation.so /system/lib64/libnb.so && \
-              ln -sf /system/lib/libndk_translation.so /system/lib/libnb.so
-          
-          # Отключаем SetupWizard
-          RUN echo 'ro.setupwizard.mode=DISABLED' >> /system/build.prop && \
-              echo 'ro.setupwizard.enable_bypass=1' >> /system/build.prop
-          
-          USER system
-          EOF
-
-      - name: Build fixed image
-        run: |
-          docker build -f Dockerfile.fix -t fixed-image:latest .
-          
-          # Тегируем для registry
+          # Сохраняем образ
           LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          docker tag fixed-image:latest ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed
+          docker commit $CONTAINER_ID ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed
+          
+          # Очищаем
+          docker rm $CONTAINER_ID
           echo "IMAGE_NAME=ghcr.io/${LOWERCASE_OWNER}/my-redroid:12.0.0-fixed" >> $GITHUB_ENV
 
       - name: Push to registry
@@ -73,7 +65,3 @@ jobs:
           docker push ${{ env.IMAGE_NAME }}
           
           echo "✅ Образ опубликован: ${{ env.IMAGE_NAME }}"
-
-      - name: Cleanup
-        run: |
-          docker system prune -f
