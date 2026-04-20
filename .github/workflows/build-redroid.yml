@@ -9,11 +9,8 @@ on:
         default: '13.0.0'
         type: choice
         options:
-          - '11.0.0'
           - '12.0.0'
-          - '12.1.0'
           - '13.0.0'
-          - '14.0.0'
 
 env:
   ANDROID_VERSION: ${{ github.event.inputs.android_version || '13.0.0' }}
@@ -33,7 +30,7 @@ jobs:
           repository: ayasa520/redroid-script
           path: redroid-script
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y lzip
@@ -46,138 +43,29 @@ jobs:
       - name: Install Python dependencies
         working-directory: ./redroid-script
         run: |
-          python -m pip install --upgrade pip
           pip install tqdm requests
 
-      - name: Determine GApps type based on Android version
-        id: gapps_type
-        run: |
-          ANDROID_VER="${{ env.ANDROID_VERSION }}"
-          
-          case "$ANDROID_VER" in
-            14.0.0)
-              echo "GAPPS_FLAG=-lg"
-              echo "GAPPS_NAME=litegapps"
-              echo "Используем LiteGapps для Android 14"
-              ;;
-            11.0.0)
-              echo "GAPPS_FLAG=-g"
-              echo "GAPPS_NAME=opengapps"
-              echo "Используем OpenGapps для Android 11"
-              ;;
-            *)
-              echo "GAPPS_FLAG=-mtg"
-              echo "GAPPS_NAME=mindthegapps"
-              echo "Используем MindTheGapps для Android $ANDROID_VER"
-              ;;
-          esac
-          
-          echo "GAPPS_FLAG=${{ env.GAPPS_FLAG }}" >> $GITHUB_ENV
-          echo "GAPPS_NAME=${{ env.GAPPS_NAME }}" >> $GITHUB_ENV
-
-      - name: Build custom image
+      - name: Build custom image (без фикса ANGLE)
         working-directory: ./redroid-script
         run: |
-          echo "Сборка Android ${{ env.ANDROID_VERSION }} с флагом ${{ env.GAPPS_FLAG }}"
           python redroid.py \
             -a ${{ env.ANDROID_VERSION }} \
-            ${{ env.GAPPS_FLAG }} \
+            -mtg \
             -n \
             -c docker
 
-      - name: List Docker images
+      - name: Find and push image
         run: |
-          echo "=== Список всех Docker образов ==="
-          docker images
-          echo "=== Поиск образа redroid ==="
-          docker images | grep redroid || echo "Образы redroid не найдены"
-
-      - name: Find created image
-        id: find_image
-        run: |
-          # Ищем созданный образ
-          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
-          
-          if [ -z "$CREATED_IMAGE" ]; then
-            # Пробуем другие варианты тегов
-            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "${{ env.ANDROID_VERSION }}" | head -n 1)
-          fi
-          
-          if [ -z "$CREATED_IMAGE" ]; then
-            echo "❌ Образ не найден!"
-            docker images
-            exit 1
-          fi
-          
-          echo "✅ Найден образ: $CREATED_IMAGE"
-          echo "created_image=$CREATED_IMAGE" >> $GITHUB_OUTPUT
-
-      - name: Create fixed image using multi-stage build
-        run: |
-          echo "🔧 Создание исправленного образа без ANGLE..."
-          
-          # Создаем Dockerfile с копированием файлов
-          cat > Dockerfile.fix << 'EOF'
-          # Используем оригинальный образ как основу
-          FROM ${{ steps.find_image.outputs.created_image }} as original
-          
-          # Создаем новый образ без ANGLE
-          FROM scratch
-          
-          # Копируем все из оригинального образа, исключая ANGLE библиотеки
-          COPY --from=original / /
-          
-          # Устанавливаем переменные окружения
-          ENV ANDROID_EMU_GLES_LIB=libGLESv2_emulation.so
-          ENV ANGLE_DISABLE=1
-          ENV LIBGL_ALWAYS_SOFTWARE=1
-          EOF
-          
-          # Собираем исправленный образ
-          docker build -f Dockerfile.fix -t fixed-image:temp .
-          
-          echo "✅ Исправленный образ создан"
-
-      - name: Verify image
-        run: |
-          echo "=== Проверка образа ==="
-          docker images | grep fixed
-          
-          # Проверяем, что образ запускается
-          docker run --rm fixed-image:temp echo "Образ работает" || echo "Ошибка при проверке"
-
-      - name: Prepare registry
-        id: registry
-        run: |
+          IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
           LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "full_registry=ghcr.io/${LOWERCASE_OWNER}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
-          echo "lowercase_owner=${LOWERCASE_OWNER}" >> $GITHUB_OUTPUT
-
-      - name: Set image tag
-        id: tag
-        run: |
-          IMAGE_TAG="${{ env.ANDROID_VERSION }}-${{ env.GAPPS_NAME }}-ndk-fixed"
-          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
-          echo "Тег образа: ${IMAGE_TAG}"
-
-      - name: Tag image for Registry
-        run: |
-          docker tag fixed-image:temp \
-            ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
-          docker tag fixed-image:temp \
-            ${{ steps.registry.outputs.full_registry }}:latest
-
-      - name: Log in to Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Push to Registry
-        run: |
-          docker push ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
-          docker push ${{ steps.registry.outputs.full_registry }}:latest
+          REGISTRY="ghcr.io/${LOWERCASE_OWNER}/${{ env.IMAGE_NAME }}"
+          TAG="${{ env.ANDROID_VERSION }}-mindthegapps-ndk"
           
-          echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}"
-
-      - name: Cleanup
-        run: |
-          docker rmi fixed-image:temp 2>/dev/null || true
-          docker system prune -f
+          docker tag $IMAGE ${REGISTRY}:${TAG}
+          docker tag $IMAGE ${REGISTRY}:latest
+          
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker push ${REGISTRY}:${TAG}
+          docker push ${REGISTRY}:latest
+          
+          echo "✅ Образ опубликован: ${REGISTRY}:${TAG}"
