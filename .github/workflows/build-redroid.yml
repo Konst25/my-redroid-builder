@@ -1,17 +1,7 @@
-name: Build Redroid Android 12 with GApps and ARM Support
+name: Build Fixed Redroid 12
 
 on:
   workflow_dispatch:
-    description: 'Сборка Redroid Android 12.0.0 с GApps и ARM поддержкой'
-  push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/build-redroid-12.yml'
-
-env:
-  ANDROID_VERSION: "12.0.0"
-  IMAGE_NAME: "my-redroid"
 
 jobs:
   build:
@@ -27,96 +17,40 @@ jobs:
           repository: ayasa520/redroid-script
           path: redroid-script
 
-      - name: Install system dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y lzip
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install Python dependencies
+      - name: Build image
         working-directory: ./redroid-script
         run: |
-          python -m pip install --upgrade pip
           pip install tqdm requests
+          python redroid.py -a 12.0.0 -mtg -n -c docker
 
-      - name: Build Android 12.0.0 image with MindTheGapps and NDK
-        working-directory: ./redroid-script
+      - name: Fix native bridge
         run: |
-          echo "🔨 Сборка Android ${{ env.ANDROID_VERSION }} с MindTheGapps и NDK трансляцией..."
-          python redroid.py \
-            -a ${{ env.ANDROID_VERSION }} \
-            -mtg \
-            -n \
-            -c docker
-
-      - name: List Docker images
-        run: |
-          echo "=== Список всех Docker образов ==="
-          docker images
-          echo "=== Поиск образа redroid ==="
-          docker images | grep redroid || echo "Образы redroid не найдены"
-
-      - name: Find created image
-        id: find_image
-        run: |
-          # Ищем созданный образ
-          CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*${{ env.ANDROID_VERSION }}" | head -n 1)
+          IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid/redroid.*12.0.0" | head -n 1)
+          CONTAINER=$(docker create $IMAGE)
+          docker start $CONTAINER
           
-          if [ -z "$CREATED_IMAGE" ]; then
-            # Пробуем другие варианты тегов
-            CREATED_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep "redroid" | grep "${{ env.ANDROID_VERSION }}" | head -n 1)
-          fi
+          # Создаем символические ссылки
+          docker exec --user 0 $CONTAINER sh -c "
+            mount -o remount,rw /system
+            ln -sf /system/lib64/libndk_translation.so /system/lib64/libnb.so
+            ln -sf /system/lib/libndk_translation.so /system/lib/libnb.so
+            mount -o remount,ro /system
+          "
           
-          if [ -z "$CREATED_IMAGE" ]; then
-            echo "❌ Образ не найден!"
-            docker images
-            exit 1
-          fi
-          
-          echo "✅ Найден образ: $CREATED_IMAGE"
-          echo "created_image=$CREATED_IMAGE" >> $GITHUB_OUTPUT
+          docker commit $CONTAINER ghcr.io/${{ github.repository_owner }}/my-redroid:12.0.0-fixed
+          docker stop $CONTAINER
 
-      - name: Verify ARM libraries
+      - name: Push to registry
         run: |
-          echo "=== Проверка установки NDK библиотек ==="
-          docker run --rm ${{ steps.find_image.outputs.created_image }} sh -c "ls -la /system/lib64/libndk_translation.so 2>/dev/null && echo '✅ NDK найден' || echo '❌ NDK не найден'"
-          docker run --rm ${{ steps.find_image.outputs.created_image }} sh -c "ls -la /system/lib/libndk_translation.so 2>/dev/null && echo '✅ NDK (32-bit) найден' || echo '❌ NDK (32-bit) не найден'"
-
-      - name: Prepare registry
-        id: registry
-        run: |
-          LOWERCASE_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          echo "full_registry=ghcr.io/${LOWERCASE_OWNER}/${{ env.IMAGE_NAME }}" >> $GITHUB_OUTPUT
-          echo "lowercase_owner=${LOWERCASE_OWNER}" >> $GITHUB_OUTPUT
-
-      - name: Set image tag
-        id: tag
-        run: |
-          TAG="${{ env.ANDROID_VERSION }}-mindthegapps-ndk"
-          echo "image_tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "Тег образа: ${TAG}"
-
-      - name: Tag image for Registry
-        run: |
-          docker tag ${{ steps.find_image.outputs.created_image }} \
-            ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
-          docker tag ${{ steps.find_image.outputs.created_image }} \
-            ${{ steps.registry.outputs.full_registry }}:latest
-
-      - name: Log in to Registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Push to Registry
-        run: |
-          docker push ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}
-          docker push ${{ steps.registry.outputs.full_registry }}:latest
-          
-          echo "✅ Образ опубликован: ${{ steps.registry.outputs.full_registry }}:${{ steps.tag.outputs.image_tag }}"
-
-      - name: Cleanup
-        run: |
-          docker system prune -f
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker push ghcr.io/${{ github.repository_owner }}/my-redroid:12.0.0-fixed
